@@ -1,0 +1,1039 @@
+---
+title: "Heunis paper"
+output: html_document
+---
+
+```{r}
+###########################################################
+
+#Metadata
+
+############################################################
+
+#The dataset itself can be found at http://proteomecentral.proteomexchange.org/cgi/GetDataset?ID=PXD006843 or via the proteome exchange database at PXD006843.
+
+
+```
+
+```{r}
+############################################################
+
+#Packages
+
+############################################################
+#Install these if you do not have them already:
+#install.packages("tidyverse")
+#install.packages("MASS")
+#install.packages("psych")
+#install.packages("lattice")
+#install.packages("lme4")
+#install.packages("car")
+#install.packages("dendextend")
+
+
+#Libraries
+library("tidyverse")#Most plots were made in the tidyverse
+library("MASS")# For cov.rob()
+library("psych")# For KMO()
+library("lattice")# For xyplot()
+library("lme4")#For lmer()
+library("car")#For anova
+library("dendextend")#For sort_dist_mat function
+
+```
+
+
+```{r}
+
+#setseed for cov.rob function
+set.seed(1234)
+```
+
+
+
+```{r}
+#########################################################################################
+
+#read in data
+
+#########################################################################################
+
+metrics = read.table("HeunisMetrics.tsv", sep ="\t", header=T)
+sampleNumber=nrow(metrics)
+sampleNames=metrics$Rep
+
+```
+
+
+
+
+```{r}
+
+###########################################################################################
+
+#Creating a dates column
+
+###########################################################################################
+
+metrics$StartTimeStamp<-as.character(metrics$StartTimeStamp)
+metrics$dates<-NULL
+for ( i in 1:nrow(metrics)){
+  metrics$dates[i]<-ifelse(nchar(metrics$StartTimeStamp[i])<10, paste(substr(metrics$month[i],1,4),"-",
+                                                                     substr(metrics$month[i],5,6),"-01 00:00:00", sep=""), paste(substr(metrics$StartTimeStamp[i],1,10)," ",
+                                                                                                                                 substr(metrics$StartTimeStamp[i],12,19), sep="")) }
+
+metrics$dates<-strptime(metrics$dates,"%Y-%m-%d")
+metrics<-metrics[order(metrics$dates),]
+
+
+#visualising the dates of the experiment
+
+ggplot(data = metrics, aes(x = as.POSIXct(dates), y = Biorep)) +
+  geom_point(pch=15, cex=2,colour="maroon3") +
+  labs(x = "Date",
+    y = "Biological replicate",
+    title = "Experimental run date",
+    subtitle = "SUN Mtb Heunis")+
+  theme(axis.text.x = element_text(angle=45))
+
+
+```
+
+```{r}
+################################################################
+
+#Preparing data for PCA
+#PCA wants data to be in numerical format, also we have numerical columns that we would like to exclude from the analysis like the dates column
+
+################################################################
+
+lowVarMetList=NULL
+for ( i in 1:ncol(metrics))
+{
+   MetVar <- var(as.numeric(metrics[,i]))
+  if(is.na(MetVar)|is.infinite(MetVar))
+  {
+    lowVarMetList<- c(lowVarMetList,colnames(metrics)[i])
+    print(colnames(metrics)[i])
+  }
+    else if(!is.na(MetVar))
+  {
+    if(MetVar<0.01)
+    {
+      print(MetVar)
+      lowVarMetList<- c(lowVarMetList,colnames(metrics)[i])
+      print(colnames(metrics)[i])
+    }
+     NoDateList<-c(lowVarMetList,"dates")
+   }
+   
+}
+
+#Ommitting the low variance list from further analysis
+
+metrics_wo_lowVarMet<-na.omit(metrics[ , !(names(metrics) %in% NoDateList)])
+datesIncl<-na.omit(metrics[ , !(names(metrics) %in% lowVarMetList)])
+
+#Should be 29 metrics 
+
+```
+
+```{r}
+#####################################################
+
+#PCA assumes independance of variables, we want to test whether the correlation is above a certain threshold.
+
+#####################################################
+
+ 
+correlationcoef<-abs(cor(metrics_wo_lowVarMet[,7:29]))
+diag(correlationcoef)<- 0
+which(correlationcoef>0.99, arr.ind = T)
+
+
+```
+
+
+
+
+
+
+```{r}
+################################################################################
+
+#qqplots to look at the distribution of the variables
+
+################################################################################
+
+onlyNumericColumns <- Filter(Negate(is.factor), metrics_wo_lowVarMet)
+rownames(onlyNumericColumns)<-metrics_wo_lowVarMet$Filename
+NumericColFilename<-cbind( metrics$Filename,onlyNumericColumns)
+colnames(NumericColFilename)[1] <- "Rep"
+row.names(NumericColFilename)<- NumericColFilename$Filename
+
+
+for(i in 1:ncol(onlyNumericColumns))
+{
+  qqnorm(onlyNumericColumns[,i],main=colnames(onlyNumericColumns[i]))
+  
+}
+
+
+```
+
+
+
+```{r}
+############################################################################
+
+#Performing robust PCR and producing a scree plot
+
+############################################################################
+
+metrics.pca<-onlyNumericColumns
+robust.cov<-cov.rob(metrics.pca)
+robust.cor<-cov2cor(robust.cov$cov)
+robust.cor.1<-robust.cov
+
+robust.cor.1$cov<-robust.cor
+
+metrics.pca.1<-metrics.pca
+for ( i in 1:ncol(metrics.pca)){
+  robust.cor.1$center[i]<-robust.cov$center[i]/sqrt(robust.cov$cov[i,i])
+  metrics.pca.1[,i]<-metrics.pca[,i]/sqrt(robust.cov$cov[i,i])
+}
+
+
+
+summary(pc.cr <- princomp(metrics.pca.1, covmat = robust.cor.1, scores=T))
+
+loadings<-loadings(pc.cr)  
+
+plot(pc.cr)
+
+
+```
+
+
+
+```{r}
+#############################################################
+
+#Setting up some universal variables to be used in the graphs that follow
+
+#############################################################
+
+
+scores<-as.data.frame(pc.cr$scores)
+scores$numbers = c(1:sampleNumber)
+scorestib<-as_tibble(pc.cr$scores)
+scores$Rep<-NULL
+scores$Fxn<-NULL
+scores$dates<-NULL
+scores$Sample<-NULL
+scores$Biorep<-NULL
+scores$names = NULL
+
+scores$Rep<-metrics_wo_lowVarMet$Rep
+scores$Fxn<-metrics_wo_lowVarMet$Fxn
+scores$Sample<-metrics_wo_lowVarMet$Sample
+scores$Biorep<-metrics_wo_lowVarMet$Biorep
+scores$names<-rownames(scores)
+scores$dates<-as.character(datesIncl$date)
+fxn<-c("Fraction_01.","Fraction_02.","Fraction_03.","Fraction_04.","Fraction_05.","Fraction_06.","Fraction_07.","Fraction_08.","Fraction_09.","Fraction_10.")
+scores$Fxn<-factor(scores$Fxn, levels=as.character(fxn))
+
+techrep<-unique(scores$Rep)
+ds<-unique(metrics$dates)
+
+
+```
+
+
+
+
+
+```{r}
+##############################################################
+
+#Different colouring to view how the data clusters
+
+
+##############################################################
+ # The ggplot2 package is specified because there are multiple versions of autoplot and the version we want is from that package
+
+#Coloured by fraction:
+ggplot2::autoplot(pc.cr,data=scores, scale=0, colour="Fxn", frame=TRUE)
+#Coloured by replicate:
+ggplot2::autoplot(pc.cr,data=scores, scale=0, frame=TRUE, colour = "Rep", frame.colour = "Rep", frame.alpha = 0)
+#Coloured by date:
+ggplot2::autoplot(pc.cr,data=scores, scale=0,colour="dates", frame=TRUE)
+#Samplenames as the labels:
+ggplot2::autoplot(pc.cr,data=scores, scale=0)+geom_text(aes(label=rownames(scores)),hjust=0, vjust=0)
+
+
+#Different representation of the colouring by dates:
+
+scores<-scores[order(scores$dates),]
+frac<-unique(scores$Fxn)
+scores$dates<-factor(scores$dates, levels=as.character(ds))
+site.color<-c("mediumorchid1", "purple","mediumpurple1","darkblue",
+               "royalblue", "aquamarine1","green2","yellowgreen", 
+               "darkgoldenrod4", "orange","orangered","red3","red4","black","grey","sienna")
+pca.plot<-xyplot(Comp.2~Comp.1,group=scores$dates, data=scores, col=site.color[1:16],
+                 pch=LETTERS[1:16],cex=1.5, font=2.5,
+                 key = list(space = "right", adj = 1,columns=1,rows=12,cex=1,
+                            text = list(as.character(ds)), font=2,col=site.color[1:16],
+                            points = list(pch =LETTERS[1:16], col=site.color[1:16])),
+                 xlab=list("PC1",cex=2),
+                 ylab=list("PC2",cex=2)
+)
+plot(pca.plot) 
+
+#Since we know there was a gap in the timeline of about a month, we would like to see if the data collected after that month separates from the dataset as a whole:
+
+
+
+scores$DateGroup<-NULL
+scores$DateGroup<-metrics$DateGroup
+
+pca.plot<-xyplot(Comp.2~Comp.1,group=scores$DateGroup, data=scores, col=c("purple","orange"),
+                 pch=c("D","V"),cex=1.5, font=2.5,
+                 key = list(space = "right", adj = 1,columns=1,rows=12,cex=1,
+                            text = list(c("After","Before")), font=2,col=c("purple","orange"),
+                            points = list(pch =c("D","V"), col=c("purple","orange"))),
+                 xlab=list("PC1",cex=2),
+                 ylab=list("PC2",cex=2)
+)
+plot(pca.plot) 
+
+
+
+
+```
+
+
+```{r}
+
+###############################################################
+
+#Loadingsplot
+
+################################################################
+autoplot(pc.cr,loadings=TRUE,scale=0,loadings.label=TRUE,loadings.colour="maroon",loadings.label.colour="maroon")
+
+```
+
+
+
+
+```{r}
+
+
+
+```
+```{r}
+
+################################################################################
+
+#Producing a graph where each fraction is a different colour+number combination
+
+################################################################################
+
+site.color<-c("mediumorchid1", "purple","mediumpurple1",
+               "royalblue", "green2","yellowgreen", 
+               "darkgoldenrod4", "orange3","red4","black")
+pca.plot<-xyplot(Comp.2~Comp.1,group=scores$Fxn, data=scores, col=site.color[1:10],
+                 pch=LETTERS[1:10],cex=1.5, font=2.5,
+                 key = list(space = "right", adj = 1,columns=1,rows=12,cex=1,
+                            text = list(as.character(fxn)), font=2,col=site.color[1:10],
+                            points = list(pch =LETTERS[1:10], col=site.color[1:10])),
+                 xlab=list("PC1",cex=2),
+                 ylab=list("PC2",cex=2)
+)
+plot(pca.plot) 
+
+
+#constellation plot - Figure 4
+
+
+x<-scores$Comp.1
+y = scores$Comp.2
+class <-factor(scores$Fxn, levels=as.character(fxn))
+df<-data.frame(cbind(x,y,class))
+
+
+df<-df[order(df$class),]
+
+gg <- merge(df,aggregate(cbind(mean.x=x,mean.y=y)~class,df,mean),by="class")
+ggplot(gg, aes(x,y,color=factor(class)))+geom_point(size=3)+
+  geom_point(aes(x=mean.x,y=mean.y),size=5)+
+  scale_colour_manual(values=c("olivedrab3", "darkorchid4", "chocolate4","darkgoldenrod2","cadetblue","brown3","forestgreen","magenta3","slateblue3","gray15"),name = "Fractions",
+labels = c("Fraction_1","Fraction_2","Fraction_3","Fraction_4","Fraction_5","Fraction_6","Fraction_7","Fraction_8","Fraction_9","Fraction_10"))+
+
+  geom_segment(aes(x=mean.x, y=mean.y, xend=x, yend=y))+ xlab("PC1")+ylab("PC2")+
+  theme(axis.text=element_text(size=12),
+        axis.title=element_text(size=14,face="bold"))
+
+
+```
+
+
+```{r}
+
+#######################################################################
+
+#Distance plot- Figure 1
+
+#######################################################################
+
+
+scores=scores[order(scores$Comp.1),]
+x<-scores$Comp.1
+y = scores$Comp.2
+i = scores$Comp.1
+j = scores$Comp.2
+x<-scores$Comp.1
+y = scores$Comp.2
+class <-factor(scores$Fxn, levels=as.character(fxn))
+df<-data.frame(cbind(x,y,class))
+
+
+
+ggplot(scores, aes(x,y))+geom_point()+
+geom_segment(aes(x=x[1], y=y[1], xend=i, yend=j), col = "gray70")+ 
+  xlab("PC1")+
+  ylab("PC2")+
+  theme(axis.text=element_text(size=12),
+        axis.title=element_text(size=14,face="bold"))+
+  ggtitle("Distance between SAWC3561-2-1-10 and every other datapoint")
+
+
+
+```
+
+```{r}
+
+#####################################################
+
+#Figure 3
+
+#####################################################
+
+
+  scores=scores[order(scores$numbers),]
+
+  scores$out = rep("",120)
+  scores$out[110] = "SAWC3651-2-1-9"
+  scores$out[108] = "SAWC3651-2-1-10"
+  scores$outmet = rep("",120)
+  scores$outmet[97] = "SAWC3651-1-2-10"
+  scores$outmet[120] = "SAWC3651-2-2-10"
+ 
+  
+autoplot(pc.cr,data=scores, scale=0, frame=TRUE, colour = "Rep", frame.colour = "Rep", frame.alpha = 0)+
+  ggrepel::geom_text_repel(aes(label=scores$outmet),hjust=0, vjust=-1.8,colour = "red",segment.colour = "black", size = 5)+
+  ggrepel::geom_text_repel(aes(label=scores$out),hjust=0, vjust=-1, size = 5)+
+  geom_rect(aes(xmin = -0.5,xmax =5, ymin = -14,ymax = -10), fill = "white")+
+  geom_rect(aes(xmin = -0.25,xmax = 0, ymin=-12, ymax=-11.75), fill = "black")+
+  geom_text(x = 2.5,y = -11.75,label = "ID, K-means & PCA", size = 4,family = "sans")+
+  geom_rect(aes(xmin = -0.25,xmax = 0, ymin=-13.25, ymax=-13), fill = "red")+
+  geom_text(x = 2.5,y = -10.75,label = "Outlier detection method:", size = 4,family = "sans", fontface="bold")+
+  geom_text(x = 2.5,y = -13,label = "ID only", size = 4,family = "sans", colour = "red")+
+  scale_colour_manual(values=c("olivedrab3", "darkorchid4", "chocolate4","darkgoldenrod4","cadetblue","brown3","forestgreen","magenta3","slateblue3","gray40","black","purple"))
+    
+
+    
+
+```
+
+
+```{r}
+
+###################################################################################
+
+#Factor analysis
+
+##################################################################################
+
+
+#Kaiser Meyer Olkin to decide the suitability of dataset to EFA (>0.60 = suitable)
+KMO(robust.cor)
+#bartletss test for sphericity should be <0.0001
+cortest.bartlett(robust.cor,n=120,diag=T)
+
+#FA is therefore appropriate
+
+#FA ml
+
+famet<- fa(robust.cor,nfactors = 5,n.obs=120 ,rotate="varimax",fm="ml",scores=TRUE)
+famet
+plot(famet$e.values)
+
+
+print(famet$loadings, cutoff=0.3)
+print(famet)
+
+fametGraph<-fa(robust.cor,nfactors=2,n.obs=120 ,rotate="varimax",fm="ml",scores=TRUE)
+
+fa.plot(fametGraph)
+fa.diagram(famet, rsize=.02)
+
+load <- famet$loadings[,1:2] 
+load
+
+plot(load,type="n") # set up plot 
+text(load,labels=rownames(load),cex=.7)
+
+#Biplot
+
+sc<-factor.scores(onlyNumericColumns,fametGraph)
+
+x <- list() 
+x$scores <- factor.scores(onlyNumericColumns,fametGraph)
+x$loadings <- fametGraph$loadings
+class(x) <- c('psych','fa')
+biplot(x,main="biplot from correlation matrix and factor scores")
+
+
+scoresfa<-as.data.frame(sc$scores)
+scoresfa$Sample<-NULL
+scoresfa$Rep<-NULL
+scoresfa$Biorep<-NULL
+scoresfa$Fxn<-NULL
+scoresfa$dates<-NULL
+scoresfa$Sample<-metrics_wo_lowVarMet$Sample
+scoresfa$Biorep<-metrics_wo_lowVarMet$Biorep
+scoresfa$Rep<-metrics_wo_lowVarMet$Rep
+scoresfa$Fxn<-metrics_wo_lowVarMet$Fxn
+scoresfa$dates<-as.character(datesIncl$date)
+techrep<-unique(scoresfa$Rep)
+fxn<-unique(scoresfa$Fxn)
+rownames(scoresfa)<-metrics_wo_lowVarMet$Filename
+scoresfa <- scoresfa[order(scoresfa$Fxn),]
+frac<-unique(scoresfa$Fxn)
+scoresfa$Fxn<-factor(scoresfa$Fxn, levels=as.character(fxn))
+site.color<-c("mediumorchid1", "purple","mediumpurple1",
+               "royalblue", "green2","yellowgreen", 
+               "goldenrod3", "orangered","red4","black")
+pca.plot<-xyplot(ML2~ML1,group=scoresfa$Fxn, data=scoresfa, col=site.color[1:10],main="Factor analysis, method=ML, rot=Varimax",
+                 pch=LETTERS[1:10],cex=1.5, font=2.5,
+                 key = list(space = "right", adj = 1,columns=1,rows=12,cex=1,
+                            text = list(as.character(frac)), font=2,col=site.color[1:10],
+                            points = list(pch =LETTERS[1:10], col=site.color[1:10])),
+                 xlab=list("Factor1",cex=2),
+                 ylab=list("Factor2",cex=2)
+)
+plot(pca.plot) 
+
+###################################
+
+
+#Biplot
+
+sc34<-factor.scores(onlyNumericColumns,famet)
+sc34$scores
+famet$loadings
+sclist <- list() 
+sclist$scores <- sc34$scores[,3:4]
+sclist$loadings <- famet$loadings[,3:4]
+class(sclist) <- c('psych','fa')
+biplot(sclist,main="biplot from correlation matrix and factor scores")
+sctable<-sc34$scores
+a34<-cbind(sctable[,1],sctable[,4])
+colnames(a34)<-c("GLS3","GLS4")
+
+scores34<-NULL
+scores34<-as.data.frame(cbind(sc34$scores[,1],sc34$scores[,3]))
+colnames(scores34)<-c("ML3","ML4")
+scores34$Sample<-NULL
+scores34$Rep<-NULL
+scores34$Fxn<-NULL
+scores34$dates<-NULL
+scores34$Sample<-metrics_wo_lowVarMet$Sample
+scores34$Rep<-metrics_wo_lowVarMet$Rep
+scores34$Fxn<-metrics_wo_lowVarMet$Fxn
+scores34$dates<-as.character(datesIncl$date)
+techrep<-unique(scores34$Rep)
+fxn<-unique(scores34$Fxn)
+rownames(scores34)<-metrics_wo_lowVarMet$Filename
+scores34 <- scores34[order(scores34$Fxn),]
+frac<-unique(scores34$Fxn)
+scores34$Fxn<-factor(scores34$Fxn, levels=as.character(fxn))
+site.color<-c("mediumorchid1", "purple","mediumpurple1",
+               "royalblue", "green2","yellowgreen", 
+               "yellow", "orangered","red4","black")
+pca.plot<-xyplot(ML4~ML3,group=scores34$Fxn, data=scores34, col=site.color[1:10],main="Factor analysis, method=ML, rot=Varimax",
+                 pch=LETTERS[1:10],cex=1.5, font=2.5,
+                 key = list(space = "right", adj = 1,columns=1,rows=12,cex=1,
+                            text = list(as.character(frac)), font=2,col=site.color[1:10],
+                            points = list(pch =LETTERS[1:10], col=site.color[1:10])),
+                 xlab=list("Factor3",cex=2),
+                 ylab=list("Factor4",cex=2)
+)
+plot(pca.plot) 
+
+fa.diagram(famet, rsize=0.5,cex=1.5)
+```
+
+```{r}
+
+####################################################################################
+
+#Individual metrics displayed as line graphs
+#I only plotted the ones that I were interested in accordingly to the loadingsplot, but you might want to apply the plotting formula to all the metrics. Although the axes will need to be changed perhaps.
+
+###################################################################################
+
+#order metrics by fraction
+metrics<-metrics[ with(metrics, order(metrics$Rep, metrics$Fxn)),]
+
+#Display colorscheme
+RGB<-c("brown","darkcyan","mediumpurple3","darkgoldenrod4","darkgreen","darkorchid4","gray9","orangered3","mediumvioletred","gray50","blue4","royalblue")
+
+#MS2Count line graph
+fracVec=metrics$MS2.Count[1:10]
+fracVecTable=as.data.frame(fracVec)
+plot(fracVec,type="l", ylim=c(0,50000),main="MS2.Count", ylab = "",xlim=c(0,10),lwd=2,col=RGB[1],axes=FALSE,xlab=" ")
+par(mar = c(4, 4, 2, 0.002) + 0.1)
+for(i in 1:11)
+  {
+  fracVec<-metrics$MS2.Count[(i*10+1):(10+(i*10))]
+  fracVecTable<-cbind(fracVecTable,fracVec)
+  lines(fracVec,las=2,col=RGB[i+1],ylab=NULL,lwd=2)
+  }
+legend("topright",legend=unique(metrics$Rep), text.col=RGB,ncol=2)
+axis(1, at = 1:10,  tick = TRUE,labels=sort(frac),pos=0,las=2)
+axis(2,pos=1)
+
+#MS1density line graph
+MS1D1=metrics$MS1.Density.Q1[1:10]
+MS1D1Table=as.data.frame(MS1D1)
+plot(MS1D1,type="l", ylim=c(0,10000),main="MS1.Density.Q1",ylab = "", xlim=c(0,10),lwd=2,col=RGB[1],axes=FALSE,xlab=" ")
+par(mar = c(4, 4, 2, 0.002) + 0.1)
+for(i in 1:11)
+  {
+  MS1D1<-metrics$MS1.Density.Q1[(i*10+1):(10+(i*10))]
+  MS1D1Table<-cbind(MS1D1Table,MS1D1)
+  lines(MS1D1,las=2,col=RGB[i+1],ylab=NULL,lwd=2)
+  }
+legend("topright",legend=unique(metrics$Rep), text.col=RGB,ncol=2)
+axis(1, at = 1:10,  tick = TRUE,labels=sort(frac),pos=0,las=2)
+axis(2,pos=1)
+
+
+#XIC HEIGHT Q4 line graph
+XHQ4=metrics$XIC.Height.Q4[1:10]
+XHQ4Table=as.data.frame(XHQ4)
+plot(XHQ4,type="l", ylim=c(0,17),main="XIC.Height.Q4",ylab = "",xlim=c(0,10),lwd=2,col=RGB[1],axes=FALSE,xlab=" ")
+par(mar = c(4, 4, 2, 0.002) + 0.1)
+for(i in 1:11)
+  {
+  XHQ4<-metrics$XIC.Height.Q4[(i*10+1):(10+(i*10))]
+  XHQ4Table<-cbind(XHQ4Table,XHQ4)
+  lines(XHQ4,las=2,col=RGB[i+1],ylab=NULL,lwd=2)
+  }
+legend("topright",legend=unique(metrics$Rep), text.col=RGB,ncol=2)
+axis(1, at = 1:10,  tick = TRUE,labels=sort(frac),pos=0,las=2)
+axis(2,pos=1)
+
+
+
+#MS1.TIC.Change.Q3 line graph
+M1TICChQ3=metrics$MS1.TIC.Change.Q3[1:10]
+M1TICChQ3Table=as.data.frame(M1TICChQ3)
+plot(M1TICChQ3,type="l", ylim=c(0,17),main="MS1.TIC.Change.Q3",ylab = "", xlim=c(0,10),lwd=2,col=RGB[1],axes=FALSE,xlab=" ")
+par(mar = c(4, 4, 2, 0.002) + 0.1)
+for(i in 1:11)
+  {
+  M1TICChQ3<-metrics$MS1.TIC.Change.Q3[(i*10+1):(10+(i*10))]
+  M1TICChQ3Table<-cbind(M1TICChQ3Table,M1TICChQ3)
+  lines(M1TICChQ3,las=2,col=RGB[i+1],ylab=NULL,lwd=2)
+  }
+legend("topright",legend=unique(metrics$Rep), text.col=RGB,ncol=2)
+axis(1, at = 1:10,  tick = TRUE,labels=sort(frac),pos=0,las=2)
+axis(2,pos=1)
+
+
+#MS1.TIC.Q3 line graph
+
+M1TICQ3=metrics$MS1.TIC.Q3[1:10]
+M1TICQ3Table=as.data.frame(M1TICQ3)
+plot(M1TICQ3,type="l", ylim=c(0,17),main="MS1.TIC.Q3",xlim=c(0,10), lwd=2,col=RGB[1],axes=FALSE,xlab="Fractions",ylab=" ")
+par(mar = c(4, 4, 2, 0.002) + 0.1)
+for(i in 1:11)
+  {
+  M1TICQ3<-metrics$MS1.TIC.Q3[(i*10+1):(10+(i*10))]
+  M1TICQ3Table<-cbind(M1TICQ3Table,M1TICQ3)
+  lines(M1TICQ3,las=2,col=RGB[i+1],ylab=NULL,lwd=2)
+  }
+legend("topright",legend=unique(metrics$Rep), text.col=RGB,ncol=2,cex=1)
+axis(1, at = 1:10,  tick = TRUE,labels=c("1","2","3","4","5","6","7","8","9","10"),pos=0,las=2)
+axis(2,pos=1)
+
+
+
+IndividualMetricsGraph <- function(data, category, y,x,
+                          colour = c("brown", "darkcyan", "mediumpurple3",
+                                  "darkgoldenrod4", "darkgreen", "darkorchid4",
+                                  "gray9", "orangered3","mediumvioletred",
+                                  "gray50", "blue4", "royalblue"), ...){
+  category= c(data,"$",category)
+  data <- data[ with(data, order(category)), ]
+  unique_category <- unique(category)
+  colours <- colour
+   datasubset <- as.data.frame(data[grep(unique_category[1], category,
+                fixed = TRUE), ])
+   
+  ggplot2::ggplot(datasubset,aes(x=c(datasubset,"$",x),y=c(datasubset,"$",y)))+
+    geom_line()
+}
+ 
+
+
+#From these graphs it is clear that SAWC3651 biological replicate 2, technical replicate 1 has presented symptoms of being an outlier
+
+```
+
+
+```{r}
+##########################################################################################
+
+# Distance matrix - PCA
+
+##########################################################################################
+
+#use the first 5 components to create a distance table as they account for 90% of the variance
+distTable=dist(scores[,1:5], method="euclidean", diag= TRUE,upper=FALSE)
+rownames(distTable)
+
+#Create distance Matrix from the table and sort
+distMatrix=as.matrix(distTable,labels=TRUE)
+
+#Add row and column names
+colnames(distMatrix) <- rownames(distMatrix) <- rownames(scores)
+
+
+#Change the order of the data so that Rep are together
+
+#rearranging into one vector
+distVec <- data.frame(t(combn(rownames(distMatrix),2)), as.numeric(distTable))
+names(distVec) <- c("c1", "c2", "distance")
+
+
+#Finding the median distance for each experiment
+
+distDf<-as.data.frame(distMatrix)
+MedDist<-NULL
+for(i in 1:ncol(distDf))
+{
+function(row) {all(row > 0.00)}
+distDf <- distDf[order(distDf[i]),] 
+distVecI<-distDf[,i]
+distVecI[distVecI == 0] <- NA
+distVecI<-na.omit(distVecI)
+ Med<-median(distVecI)
+ MedDist<- c(MedDist,Med)
+}
+MedDistDf<- as.data.frame(MedDist)
+distDf <- as.data.frame(distMatrix)
+rownames(MedDistDf) <- rownames(distDf)
+
+
+distMatrix<-sort_dist_mat(distMatrix)
+
+boxplot(MedDistDf, range=10,main="Median Euclidean distance from PCA")
+
+
+#Experiment SAWC3651- bio rep 2 tech rep 1 fraction 9 and 10  seem to have unusually high distances, above 3 x IQR and can therefore be considered outliers
+
+```
+
+```{r}
+##########################################################################################
+
+# Distance matrix - FA
+
+##########################################################################################
+
+
+scores5fa<-factor.scores(onlyNumericColumns,famet)
+scores5fa<-scores5fa$scores
+rownames(scores5fa)<-rownames(onlyNumericColumns)
+#use the first 5 components according to elbow method
+distTable=dist(scores5fa, method="euclidean", diag= TRUE,upper=FALSE)
+rownames(distTable)
+
+#Create distance Matrix from the table and sort
+distMatrix=as.matrix(distTable,labels=TRUE)
+
+#Add row and column names
+colnames(distMatrix) <- rownames(distMatrix) <- rownames(scores5fa)
+
+
+#Change the order of the data so that Rep are together
+
+#rearranging into one vector
+distVec <- data.frame(t(combn(rownames(distMatrix),2)), as.numeric(distTable))
+names(distVec) <- c("c1", "c2", "distance")
+
+
+#Finding the median distance for each experiment
+
+distDf<-as.data.frame(distMatrix)
+MedDist<-NULL
+for(i in 1:ncol(distDf))
+{
+function(row) {all(row > 0.00)}
+distDf <- distDf[order(distDf[i]),] 
+distVecI<-distDf[,i]
+distVecI[distVecI == 0] <- NA
+distVecI<-na.omit(distVecI)
+ Med<-median(distVecI)
+ MedDist<- c(MedDist,Med)
+}
+MedDistDfFA<- as.data.frame(MedDist)
+distDf <- as.data.frame(distMatrix)
+rownames(MedDistDfFA) <- rownames(distDf)
+
+
+distMatrix<-sort_dist_mat(distMatrix)
+
+boxplot(MedDistDfFA, range=3,main="Median Euclidean distance from FA")
+
+# There are therefore no outliers with the Tukey > 3 x IQR criteria
+
+#For interest's sake let's lower the bar and set the acceptance criteria to 1.5 x the IQR. You should always set the criteria prior to performing the test, However, in this case I just want to see if the factor analysis was on the same track as the PCA.
+
+boxplot(MedDistDfFA, range=1.5,main="Median Euclidean distance from FA")
+
+# Now we see there are two samples identified as outliers.However, they appear to be SW2-2-8 and SA1-2-3 and their median distances are not all that far from the others
+
+```
+
+
+
+```{r}
+#############################################################
+
+#Write distance matrix to a file for storage
+
+#############################################################
+
+#Feel free to choose another file format if you wish:
+
+write.table(distVec,file="pca_eucl_distance_vector05032019.csv",sep=",",col.names=NA)
+
+```
+
+
+```{r}
+
+############################################################################################
+
+#Determine if different fractions really are clustering together by repeated measures anova - FA
+
+############################################################################################
+
+scoresfa$Fxn<-as.factor(scoresfa$Fxn)
+scoresfa$Rep<-scoresfa$Rep
+lm<-lmer(ML1~Fxn +Sample+scores$Biorep+(1|scoresfa$Rep),data=scoresfa)
+Anova(lm)
+lm<-lmer(ML2~Fxn+ Sample+scores$Biorep+(1|scoresfa$Rep),data=scoresfa)
+Anova(lm)
+#Therefore, fractions have a significant effect on the clustering in the first two principle components.
+
+```
+
+
+```{r}
+
+############################################################################################
+
+#Determine if different fractions really are clustering together by repeated measures anova - PCA
+
+############################################################################################
+
+scores$Fxn<-as.factor(scores$Fxn)
+scores$Rep<-scores$Rep
+lm<-lmer(Comp.1~Fxn +Sample+(1|scores$Biorep)+(1|scores$Rep),data=scores)
+Anova(lm)
+lm<-lmer(Comp.2~Fxn+ Sample+(1|scores$Rep),data=scores)
+Anova(lm)
+#Therefore, fractions have a significant effect on the clustering in the first two principle components.
+```
+
+
+
+```{r}
+
+#########################################################################################
+
+#loadings heatmap
+
+#########################################################################################
+
+#loadings
+loadings(pc.cr, digits=2, sort=TRUE,cutoff=0.1)
+# From these loadings, it is clear that the MS2 Density metrics most greatly influenced PC1 and MS1 freq max most greatly influenced PC2
+loadingsmatrix<-as.matrix(loadings(pc.cr, digits=2, sort=TRUE,cutoff=0.1))
+loadingsmatrix
+
+#add heat map of loadings
+loadings_heatmap <- heatmap(loadingsmatrix[,1:2], Rowv=NA, Colv=NA, col = cm.colors(256),cexCol = 1, scale="column", margins=c(5,10))
+
+```
+
+
+
+```{r}
+
+################################
+
+#Writing the heatmap to a file
+
+##################################
+
+
+write.table(loadingsmatrix,file="T:/projects/20121019-SUN-Mtb-fractionated/loadingsmatrix.csv",sep=",",col.names=NA)
+
+```
+
+
+
+```{r}
+
+##############################################
+
+#Stacked barplots for RT-TIC - Figure 5A
+
+#############################################
+
+
+
+
+metrics<-metrics[order(metrics$Rep,metrics$Fxn),]
+#reorganise data:
+sbarplotdata<-as.data.frame(cbind(metrics$RT.TIC.Q1,metrics$RT.TIC.Q2,metrics$RT.TIC.Q3,metrics$RT.TIC.Q4))
+
+#getting colnames
+colnms<-NULL
+
+colnmsa<-c("SA1-1-1","SA1-1-2","SA1-1-3","SA1-1-4","SA1-1-5","SA1-1-6","SA1-1-7","SA1-1-8","SA1-1-9","SA1-1-10","SA1-2-1","SA1-2-2","SA1-2-3","SA1-2-4","SA1-2-5","SA1-2-6","SA1-2-7","SA1-2-8","SA1-2-9","SA1-2-10","SA2-1-1","SA2-1-2","SA2-1-3","SA2-1-4","SA2-1-5","SA2-1-6","SA2-1-7","SA2-1-8","SA2-1-9","SA2-1-10","SA2-2-1","SA2-2-2","SA2-2-3","SA2-2-4","SA2-2-5","SA2-2-6","SA2-2-7","SA2-2-8","SA2-2-9","SA2-2-10")
+colnmsb<-NULL
+for(i in 1:40)
+{
+  tempA<-substr(metrics$Filename[i],1,8)
+  colnmsb<-c(colnmsb, tempA)
+}
+colnmsc<-NULL
+for(i in 81:120)
+{
+  tempA<-substr(metrics$Filename[i],1,8)
+  colnmsc<-c(colnmsc, tempA)
+  }
+
+colnms<- c(colnmsb,colnmsa,colnmsc)
+
+rownames(sbarplotdata)<-colnms
+colnames(sbarplotdata)<-c("RT.TIC.Q1","RT.TIC.Q2","RT.TIC.Q3","RT.TIC.Q4")
+sbarplotdata<-t(sbarplotdata)
+
+
+barplot(sbarplotdata,las=2,axes=FALSE,col=c("blue","lightblue","darkcyan","darkslategray1"))
+legend("topleft",legend=c("RT.TIC.Q1","RT.TIC.Q2","RT.TIC.Q3","RT.TIC.Q4"),fill=c("blue","lightblue","darkcyan","darkslategray1"),cex=0.8)
+
+####Only H37RV
+
+barplot(sbarplotdata[,1:40],las=2,axes=FALSE,col=c("blue","lightblue","darkcyan","darkslategray1"),main="H37RV")
+legend("topleft",legend=c("RT.TIC.Q1","RT.TIC.Q2","RT.TIC.Q3","RT.TIC.Q4"),fill=c("blue","lightblue","darkcyan","darkslategray1"),cex=0.8)
+
+####Only SAWC3517
+
+barplot(sbarplotdata[,41:80],las=2,axes=FALSE,col=c("blue","lightblue","darkcyan","darkslategray1"), main="Stacked barplot of RT.TIC for all four quartiles - SAWC3517",xlab=NULL, ylab="")
+legend("topleft",legend=c("RT.TIC.Q1","RT.TIC.Q2","RT.TIC.Q3","RT.TIC.Q4"),fill=c("blue","lightblue","darkcyan","darkslategray1"),cex=0.8)
+
+####Only SAWC3651
+
+barplot(sbarplotdata[,81:120],las=2,axes=FALSE,col=c("blue","lightblue","darkcyan","darkslategray1"), main="SAWC3651")
+legend("topleft",legend=c("RT.TIC.Q1","RT.TIC.Q2","RT.TIC.Q3","RT.TIC.Q4"),fill=c("blue","lightblue","darkcyan","darkslategray1"),cex=0.8)
+#One can clearly see the 9th fraction of SWAC3651displaying disproportionate RT-TIC ratios
+
+```
+
+```{r}
+##############################################
+
+#Stacked barplots for RT-MSMS
+
+#############################################
+
+#reorganise data:
+sbarplotdata<-as.data.frame(cbind(metrics$RT.MSMS.Q1,metrics$RT.MSMS.Q2,metrics$RT.MSMS.Q3,metrics$RT.MSMS.Q4))
+
+#creating data
+rownames(sbarplotdata)<-colnms
+colnames(sbarplotdata)<-c("RT.MSMS.Q1","RT.MSMS.Q2","RT.MSMS.Q3","RT.MSMS.Q4")
+sbarplotdata<-t(sbarplotdata)
+
+
+barplot(sbarplotdata,las=2,axes=FALSE,col=c("darkmagenta","mediumorchid","plum2","mediumpurple1"))
+legend("topleft",legend=c("RT.MSMS.Q1","RT.MSMS.Q2","RT.MSMS.Q3","RT.MSMS.Q4"),fill=c("darkmagenta","mediumorchid","plum2","mediumpurple1"),cex=0.8)
+
+####Only H37RV
+
+barplot(sbarplotdata[,1:40],las=2,axes=FALSE,col=c("darkmagenta","mediumorchid","plum2","mediumpurple1"),main="H37RV")
+legend("topleft",legend=c("RT.MSMS.Q1","RT.MSMS.Q2","RT.MSMS.Q3","RT.MSMS.Q4"),fill=c("darkmagenta","mediumorchid","plum2","mediumpurple1"),cex=0.8)
+
+####Only SAWC3517
+
+barplot(sbarplotdata[,41:80],las=2,axes=FALSE,col=c("darkmagenta","mediumorchid","plum2","mediumpurple1"), main="SAWC3517")
+legend("topleft",legend=c("RT.MSMS.Q1","RT.MSMS.Q2","RT.MSMS.Q3","RT.MSMS.Q4"),fill=c("darkmagenta","mediumorchid","plum2","mediumpurple1"),cex=0.8)
+
+####Only SAWC3651
+
+barplot(sbarplotdata[,81:120],las=2,axes=FALSE,col=c("darkmagenta","mediumorchid","plum2","mediumpurple1"), main="SAWC3651")
+legend("topleft",legend=c("RT.MSMS.Q1","RT.MSMS.Q2","RT.MSMS.Q3","RT.MSMS.Q4"),fill=c("darkmagenta","mediumorchid","plum2","mediumpurple1"),cex=0.8)
+#One can clearly see the 9th fraction of SWAC3651displaying disproportionate RT-MSMS ratios
+
+
+
+```
+
+
+
+```{r}
+####################################################################################################
+
+#Read in data from idpicker
+#Export to excell from within idpicker and then save and read in here
+
+#####################################################################################################
+
+idData = read.csv(file="forFigure5B.csv", header=T, sep=";")
+
+```
+
+```{r}
+
+###################################################################################
+
+#Figure 5B
+
+
+###################################################################################
+
+
+
+idData$X<- factor(idData$X, levels = unique(idData$X[order(idData$Nums)]))
+
+ggplot(idData[order(idData$Nums),], aes(x =idData$X , y =idData$Distinct.Peptides, colour = idData$Distinct.matches ))+
+  geom_line(aes(group = idData$Distinct.matches), size = 1.5 )+
+  labs(title="Identification counts per replicate - SAWC3517", y="Count", x="Replicate", colour = "",size=3)+
+  theme(axis.text.x = element_text(angle=90,size=15),axis.title.x = element_text(size=15),axis.title.y = element_text(size=15), legend.position = "bottom",legend.text=element_text(size=14),plot.title = element_text(face = "bold", size=15))
+
+  
+
+```
+
+
