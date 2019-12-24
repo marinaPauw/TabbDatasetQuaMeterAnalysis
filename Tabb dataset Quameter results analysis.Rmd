@@ -742,7 +742,7 @@ rownames(MedDistDf) <- rownames(distDf)
 
 distMatrix<-sort_dist_mat(distMatrix)
 
-boxplot(MedDistDf, range=10,main="Median Euclidean distance from PCA")
+boxplot(MedDistDf, range=3,main="Median Euclidean distance from PCA")
 
 
 #Experiment SAWC3651- bio rep 2 tech rep 1 fraction 9 and 10  seem to have unusually high distances, above 3 x IQR and can therefore be considered outliers
@@ -805,7 +805,7 @@ boxplot(MedDistDfFA, range=3,main="Median Euclidean distance from FA")
 
 #For interest's sake let's lower the bar and set the acceptance criteria to 1.5 x the IQR. You should always set the criteria prior to performing the test, However, in this case I just want to see if the factor analysis was on the same track as the PCA.
 
-boxplot(MedDistDfFA, range=1.5,main="Median Euclidean distance from FA")
+boxplot(MedDistDfFA, range=3,main="Median Euclidean distance from FA")
 
 # Now we see there are two samples identified as outliers.However, they appear to be SW2-2-8 and SA1-2-3 and their median distances are not all that far from the others
 
