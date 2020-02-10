@@ -855,12 +855,16 @@ Anova(lm)
 ############################################################################################
 
 scores$Fxn<-as.factor(scores$Fxn)
-scores$Rep<-scores$Rep
-lm<-lmer(Comp.1~Fxn +Sample+(1|scores$Biorep)+(1|scores$Rep),data=scores)
 Anova(lm)
-lm<-lmer(Comp.2~Fxn+ Sample+(1|scores$Rep),data=scores)
-Anova(lm)
-#Therefore, fractions have a significant effect on the clustering in the first two principle components.
+for(i in scores[1:5])
+{
+  lm<-lmer(i~Fxn +Sample+(1|Biorep)+(1|Rep)+(1|dates),data=scores)
+print(Anova(lm))
+  
+}
+
+#5 hypotheses tested so Bonferroni correction p<(0.05/5=0.01)
+#Therefore the first four are significant, not #5
 ```
 
 
