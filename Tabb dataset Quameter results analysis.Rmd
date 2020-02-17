@@ -134,7 +134,12 @@ for ( i in 1:ncol(metrics))
 metrics_wo_lowVarMet<-na.omit(metrics[ , !(names(metrics) %in% NoDateList)])
 datesIncl<-na.omit(metrics[ , !(names(metrics) %in% lowVarMetList)])
 
-#Should be 29 metrics 
+######### - NB: The datesIncl dataframe contains the dates column. This column is also numerical so will be included in the PCA if it is
+# used as input. Therefore the metrics_wo_lowVarMet dataframe is the one that should be used as input for the PCA, whereas datesIncl 
+# will be used later to create a dates column for colouring the PCA by date.
+
+
+#metrics_wo_lowVarMet should be 29 metrics 
 
 ```
 
